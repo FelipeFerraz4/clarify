@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "clarify-lsp"
+version = "0.1.0"
+description = "A simple pygls-based language server"
+authors = [
+    {name = "Clarify Team"}
+]
+dependencies = [
+    "pygls>=1.0.0"
+]
+requires-python = ">=3.8"
+
+[project.scripts]
+clarify-lsp = "clarify_lsp.server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
