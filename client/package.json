@@ -1,0 +1,44 @@
+{
+  "name": "python-refactor",
+  "displayName": "Python Refactor",
+  "description": "Extensão para refatorações básicas em Python",
+  "version": "0.0.1",
+  "publisher": "Felipe Ferraz",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "activationEvents": [
+    "onLanguage:python"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "pythonRefactor.renameVariable",
+        "title": "Python Refactor: Rename Variable"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "pythonRefactor.renameVariable",
+        "key": "ctrl+alt+r",
+        "when": "editorTextFocus && editorLangId == python"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.103.0",
+    "typescript": "4.9.5",
+    "vscode-test": "^1.6.1"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  }
+}
