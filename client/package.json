@@ -16,12 +16,21 @@
       {
         "command": "pythonRefactor.renameVariable",
         "title": "Python Refactor: Rename Variable"
+      },
+      {
+        "command": "pythonRefactor.extractFunction",
+        "title": "Python Refactor: Extract Function"
       }
     ],
     "keybindings": [
       {
         "command": "pythonRefactor.renameVariable",
         "key": "ctrl+alt+r",
+        "when": "editorTextFocus && editorLangId == python"
+      },
+      {
+        "command": "pythonRefactor.extractFunction",
+        "key": "ctrl+alt+f",
         "when": "editorTextFocus && editorLangId == python"
       }
     ]
