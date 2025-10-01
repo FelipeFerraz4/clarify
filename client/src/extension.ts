@@ -11,10 +11,10 @@ let client: LanguageClient;
 
 export function activate(context: vscode.ExtensionContext) {
     const serverOptions: ServerOptions = {
-    command: "python",
-    args: [path.join(context.extensionPath, "..", "server", "main.py")],
-    transport: TransportKind.stdio,
-};
+        command: "python",
+        args: [path.join(context.extensionPath, "..", "server", "main.py")],
+        transport: TransportKind.stdio,
+    };
 
     const clientOptions: LanguageClientOptions = {
         documentSelector: [{ scheme: "file", language: "python" }],
@@ -30,16 +30,27 @@ export function activate(context: vscode.ExtensionContext) {
     client.start();
     context.subscriptions.push(client);
 
-    // Comando customizado de renomear
-    const disposable = vscode.commands.registerCommand(
+    const disposableRename = vscode.commands.registerCommand(
         "pythonRefactor.renameVariable",
         async () => {
-            // Apenas aciona o comando de rename nativo
             await vscode.commands.executeCommand("editor.action.rename");
         }
     );
 
-    context.subscriptions.push(disposable);
+    const disposableExtract = vscode.commands.registerCommand(
+        "pythonRefactor.extractFunction",
+        async () => {
+            await vscode.commands.executeCommand(
+                "editor.action.codeAction",
+                {
+                    kind: "refactor.extract",
+                    apply: "first"
+                }
+            );
+        }
+    );
+
+    context.subscriptions.push(disposableRename, disposableExtract);
 }
 
 export function deactivate(): Thenable<void> | undefined {
