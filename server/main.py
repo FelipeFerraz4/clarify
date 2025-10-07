@@ -30,6 +30,11 @@ class Renamer(ast.NodeTransformer):
         if node.id == self.old_name:
             node.id = self.new_name
         return self.generic_visit(node)
+    
+    def visit_Attribute(self, node):
+        if node.attr == self.old_name:
+            node.attr = self.new_name
+        return self.generic_visit(node)
 
 
 class RefactorServer(LanguageServer):
