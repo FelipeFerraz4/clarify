@@ -1,19 +1,25 @@
 import ast
 import traceback
+import logging
+import os
 
-from lsprotocol.types import (
-    TEXT_DOCUMENT_CODE_ACTION,
-    TEXT_DOCUMENT_RENAME,
-    CodeAction,
-    CodeActionKind,
-    CodeActionParams,
-    Position,
-    Range,
-    TextEdit,
-    WorkspaceEdit,
-)
+from lsprotocol.types import (TEXT_DOCUMENT_CODE_ACTION, TEXT_DOCUMENT_RENAME,
+                              CodeAction, CodeActionKind, CodeActionParams,
+                              Position, Range, TextEdit, WorkspaceEdit)
 from pygls.server import LanguageServer
 
+
+# Configure file-based logging
+_LOG_DIR = os.path.dirname(__file__)
+_LOG_FILE = os.path.join(_LOG_DIR, "refactor.log")
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[logging.FileHandler(_LOG_FILE, encoding="utf-8")],
+)
+
+logger = logging.getLogger("refactor-server")
 
 class Renamer(ast.NodeTransformer):
     def __init__(self, old_name, new_name):
@@ -283,8 +289,7 @@ def analyse_variables(code_snippet, full_code, start_line, end_line):
         return list(inputs), list(outputs)
 
     except Exception as e:
-        print(f"[ERROR] analyse_variables failed: {e}")
-        print(traceback.format_exc())
+        logger.exception("analyse_variables failed")
         return [], []
 
 
@@ -300,7 +305,7 @@ def extract_function(ls: RefactorServer, params: CodeActionParams):
 
         extracted_code = "\n".join(lines[start_line : end_line + 1]).strip()
         if not extracted_code:
-            print("[INFO] Selected range too small or empty for extraction")
+            logger.info("Selected range too small or empty for extraction")
             return None
 
         inputs, outputs = analyse_variables(extracted_code, code, start_line, end_line)
@@ -355,18 +360,16 @@ def extract_function(ls: RefactorServer, params: CodeActionParams):
         ls.show_message_log(
             f"[ERROR] Extract Function failed: {e}\n{traceback.format_exc()}"
         )
+        logger.exception("Extract Function failed")
         return None
 
 
 if __name__ == "__main__":
     import sys
 
-    print("[INFO] Starting Python Refactor Server...")
+    logger.info("Starting Python Refactor Server...")
     try:
         server.start_io(sys.stdin.buffer, sys.stdout.buffer)
     except Exception as e:
-        print(f"[ERROR] Server failed to start: {e}")
-        import traceback
-
-        print(traceback.format_exc())
-    print("[INFO] Server stopped.")
+        logger.exception("Server failed to start")
+    logger.info("Server stopped.")
