@@ -298,10 +298,180 @@ def analyse_variables(code_snippet, full_code, start_line, end_line):
         return [], []
 
 
+def find_statement_line(tree, target_line):
+    """
+    Find the line number where the statement containing target_line starts.
+    
+    Args:
+        tree: AST tree
+        target_line: Line number (1-indexed, AST format)
+    
+    Returns:
+        int: Line number (1-indexed) where the containing statement starts
+    """
+    containing_stmt = None
+    
+    for node in ast.walk(tree):
+        # Check for statement nodes
+        if isinstance(node, (ast.Expr, ast.Assign, ast.AugAssign, ast.AnnAssign,
+                            ast.Return, ast.If, ast.While, ast.For, ast.With,
+                            ast.FunctionDef, ast.ClassDef, ast.Try)):
+            if hasattr(node, 'lineno') and hasattr(node, 'end_lineno'):
+                if node.lineno <= target_line <= node.end_lineno:
+                    # Found a containing statement - keep the smallest one
+                    if containing_stmt is None or node.lineno > containing_stmt.lineno:
+                        containing_stmt = node
+    
+    return containing_stmt.lineno if containing_stmt else target_line
+
+
+def get_line_indentation(line_text):
+    """Get the indentation (spaces) at the start of a line."""
+    return len(line_text) - len(line_text.lstrip())
+
+
+def create_extract_variable_action(doc, params: CodeActionParams):
+    """
+    Create a code action for extracting a variable from selected code.
+    
+    Args:
+        doc: Document object
+        params: CodeActionParams from LSP
+    
+    Returns:
+        CodeAction or None
+    """
+    try:
+        code = doc.source
+        lines = code.splitlines()
+        
+        sel_range: Range = params.range
+        start_line = sel_range.start.line
+        end_line = sel_range.end.line
+        start_char = sel_range.start.character
+        end_char = sel_range.end.character
+        
+        # Extract the selected text
+        if start_line == end_line:
+            # Single line selection
+            selected_text = lines[start_line][start_char:end_char].strip()
+        else:
+            # Multi-line selection
+            first_line = lines[start_line][start_char:]
+            last_line = lines[end_line][:end_char]
+            middle_lines = lines[start_line + 1:end_line]
+            selected_text = "\n".join([first_line] + middle_lines + [last_line]).strip()
+        
+        if not selected_text:
+            return None
+        
+        # Validate it's an expression (try to parse it)
+        try:
+            ast.parse(selected_text, mode='eval')
+        except SyntaxError:
+            # Not a valid expression
+            logger.info(f"Selected text is not a valid expression: {selected_text}")
+            return None
+        
+        # Parse the full code to find the containing statement
+        try:
+            tree = ast.parse(code)
+        except SyntaxError:
+            logger.info("Could not parse document for extract variable")
+            return None
+        
+        # Find the statement containing this expression
+        # Convert to 1-indexed for AST
+        statement_line = find_statement_line(tree, start_line + 1)
+        # Convert back to 0-indexed for LSP
+        statement_line_idx = statement_line - 1
+        
+        # Get indentation of the containing statement
+        statement_text = lines[statement_line_idx]
+        indent = " " * get_line_indentation(statement_text)
+        
+        # Generate variable name
+        var_name = "extracted_var"
+        
+        # Create the variable assignment
+        assignment_line = f"{indent}{var_name} = {selected_text}\n"
+        
+        # Create edits:
+        # 1. Insert variable assignment before the statement
+        insert_edit = TextEdit(
+            range=Range(
+                start=Position(line=statement_line_idx, character=0),
+                end=Position(line=statement_line_idx, character=0),
+            ),
+            new_text=assignment_line,
+        )
+        
+        # 2. Replace selected expression with variable name
+        replace_edit = TextEdit(
+            range=Range(
+                start=Position(line=start_line, character=start_char),
+                end=Position(line=end_line, character=end_char),
+            ),
+            new_text=var_name,
+        )
+        
+        return CodeAction(
+            title="Extract Variable",
+            kind=CodeActionKind.RefactorExtract,
+            edit=WorkspaceEdit(
+                changes={params.text_document.uri: [insert_edit, replace_edit]}
+            ),
+            data={"ask_for_name": True},
+        )
+    
+    except Exception as e:
+        logger.exception(f"Extract Variable failed: {e}")
+        return None
+
+
 @server.feature(TEXT_DOCUMENT_CODE_ACTION)
-def extract_function(ls: RefactorServer, params: CodeActionParams):
+def code_actions(ls: RefactorServer, params: CodeActionParams):
+    """
+    Provide code actions for refactoring.
+    Returns both Extract Function and Extract Variable actions.
+    """
+    actions = []
+    
     try:
         doc = ls.workspace.get_document(params.text_document.uri)
+        
+        # Try to create Extract Variable action
+        extract_var_action = create_extract_variable_action(doc, params)
+        if extract_var_action:
+            actions.append(extract_var_action)
+        
+        # Try to create Extract Function action
+        extract_func_action = create_extract_function_action(doc, params)
+        if extract_func_action:
+            actions.append(extract_func_action)
+        
+        return actions if actions else None
+    
+    except Exception as e:
+        ls.show_message_log(
+            f"[ERROR] Code actions failed: {e}\n{traceback.format_exc()}"
+        )
+        logger.exception("Code actions failed")
+        return None
+
+
+def create_extract_function_action(doc, params: CodeActionParams):
+    """
+    Create a code action for extracting a function from selected code.
+    
+    Args:
+        doc: Document object
+        params: CodeActionParams from LSP
+    
+    Returns:
+        CodeAction or None
+    """
+    try:
         code = doc.source
         lines = code.splitlines()
 
@@ -350,22 +520,17 @@ def extract_function(ls: RefactorServer, params: CodeActionParams):
             new_text=function_text,
         )
 
-        return [
-            CodeAction(
-                title="Extract Function",
-                kind=CodeActionKind.RefactorExtract,
-                edit=WorkspaceEdit(
-                    changes={params.text_document.uri: [selection_edit, function_edit]}
-                ),
-                data={"ask_for_name": True},
-            )
-        ]
+        return CodeAction(
+            title="Extract Function",
+            kind=CodeActionKind.RefactorExtract,
+            edit=WorkspaceEdit(
+                changes={params.text_document.uri: [selection_edit, function_edit]}
+            ),
+            data={"ask_for_name": True},
+        )
 
     except Exception as e:
-        ls.show_message_log(
-            f"[ERROR] Extract Function failed: {e}\n{traceback.format_exc()}"
-        )
-        logger.exception("Extract Function failed")
+        logger.exception(f"Extract Function failed: {e}")
         return None
 
 
