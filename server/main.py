@@ -330,6 +330,217 @@ def get_line_indentation(line_text):
     return len(line_text) - len(line_text.lstrip())
 
 
+def find_function_def(tree, func_name):
+    """
+    Find a function definition by name in the AST.
+    
+    Args:
+        tree: AST tree
+        func_name: Name of the function to find
+    
+    Returns:
+        ast.FunctionDef node or None
+    """
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == func_name:
+            return node
+    return None
+
+
+def inline_function_body(func_def, call_node, code_lines):
+    """
+    Inline a function body by substituting parameters with arguments.
+    
+    Args:
+        func_def: ast.FunctionDef node
+        call_node: ast.Call node
+        code_lines: List of source code lines
+    
+    Returns:
+        str: Inlined code or None if cannot inline
+    """
+    try:
+        # Build parameter to argument mapping
+        param_map = {}
+        
+        # Handle positional arguments
+        for i, arg in enumerate(call_node.args):
+            if i < len(func_def.args.args):
+                param_name = func_def.args.args[i].arg
+                # Get the source code of the argument
+                arg_code = ast.unparse(arg)
+                param_map[param_name] = arg_code
+        
+        # Handle keyword arguments
+        for keyword in call_node.keywords:
+            if keyword.arg:
+                param_map[keyword.arg] = ast.unparse(keyword.value)
+        
+        # Get the function body
+        if not func_def.body:
+            return None
+        
+        # Handle simple single-return functions
+        if len(func_def.body) == 1 and isinstance(func_def.body[0], ast.Return):
+            # Simple case: just a return statement
+            return_node = func_def.body[0]
+            if return_node.value:
+                # Clone and transform the return expression
+                transformed = _substitute_names(return_node.value, param_map)
+                return ast.unparse(transformed)
+            return None
+        
+        # Handle multi-statement functions (more complex)
+        # For now, we'll try to inline simple cases
+        inlined_statements = []
+        
+        for stmt in func_def.body:
+            transformed_stmt = _substitute_names(stmt, param_map)
+            inlined_statements.append(transformed_stmt)
+        
+        # Check if the last statement is a return
+        if inlined_statements and isinstance(inlined_statements[-1], ast.Return):
+            # If it's just a return statement at the end
+            if len(inlined_statements) == 1:
+                return_node = inlined_statements[-1]
+                if return_node.value:
+                    return ast.unparse(return_node.value)
+            else:
+                # Multi-statement function - harder to inline safely
+                # We'll skip this for now
+                logger.info("Cannot inline multi-statement function")
+                return None
+        
+        return None
+    
+    except Exception as e:
+        logger.exception(f"Failed to inline function body: {e}")
+        return None
+
+
+def _substitute_names(node, param_map):
+    """
+    Recursively substitute parameter names with argument expressions.
+    
+    Args:
+        node: AST node
+        param_map: Dict mapping parameter names to argument expressions
+    
+    Returns:
+        Transformed AST node
+    """
+    if isinstance(node, ast.Name) and node.id in param_map:
+        # Parse the replacement expression and return its AST
+        try:
+            replacement = ast.parse(param_map[node.id], mode='eval').body
+            return ast.copy_location(replacement, node)
+        except:
+            return node
+    
+    # Recursively process child nodes
+    for field, value in ast.iter_fields(node):
+        if isinstance(value, list):
+            new_list = []
+            for item in value:
+                if isinstance(item, ast.AST):
+                    new_list.append(_substitute_names(item, param_map))
+                else:
+                    new_list.append(item)
+            setattr(node, field, new_list)
+        elif isinstance(value, ast.AST):
+            setattr(node, field, _substitute_names(value, param_map))
+    
+    return node
+
+
+def create_inline_function_action(doc, params: CodeActionParams):
+    """
+    Create a code action for inlining a function call.
+    
+    Args:
+        doc: Document object
+        params: CodeActionParams from LSP
+    
+    Returns:
+        CodeAction or None
+    """
+    try:
+        code = doc.source
+        lines = code.splitlines()
+        
+        # Get cursor position
+        cursor_line = params.range.start.line
+        cursor_char = params.range.start.character
+        
+        # Parse the code
+        try:
+            tree = ast.parse(code)
+        except SyntaxError:
+            return None
+        
+        # Find the Call node at cursor position
+        finder = NodeFinder(cursor_line, cursor_char)
+        finder.visit(tree)
+        
+        # Look for a Call node in candidates
+        call_node = None
+        for node in finder.candidates:
+            if isinstance(node, ast.Call):
+                call_node = node
+                break
+        
+        if not call_node:
+            return None
+        
+        # Get the function name being called
+        func_name = None
+        if isinstance(call_node.func, ast.Name):
+            func_name = call_node.func.id
+        elif isinstance(call_node.func, ast.Attribute):
+            # Method call - skip for now
+            return None
+        else:
+            return None
+        
+        # Find the function definition
+        func_def = find_function_def(tree, func_name)
+        if not func_def:
+            logger.info(f"Function definition for '{func_name}' not found")
+            return None
+        
+        # Inline the function
+        inlined_code = inline_function_body(func_def, call_node, lines)
+        if not inlined_code:
+            logger.info(f"Cannot inline function '{func_name}'")
+            return None
+        
+        # Create the edit to replace the function call
+        call_start_line = call_node.lineno - 1  # Convert to 0-indexed
+        call_end_line = call_node.end_lineno - 1
+        call_start_char = call_node.col_offset
+        call_end_char = call_node.end_col_offset
+        
+        replace_edit = TextEdit(
+            range=Range(
+                start=Position(line=call_start_line, character=call_start_char),
+                end=Position(line=call_end_line, character=call_end_char),
+            ),
+            new_text=inlined_code,
+        )
+        
+        return CodeAction(
+            title=f"Inline function '{func_name}'",
+            kind=CodeActionKind.RefactorInline,
+            edit=WorkspaceEdit(
+                changes={params.text_document.uri: [replace_edit]}
+            ),
+        )
+    
+    except Exception as e:
+        logger.exception(f"Inline Function failed: {e}")
+        return None
+
+
 def create_extract_variable_action(doc, params: CodeActionParams):
     """
     Create a code action for extracting a variable from selected code.
@@ -433,7 +644,7 @@ def create_extract_variable_action(doc, params: CodeActionParams):
 def code_actions(ls: RefactorServer, params: CodeActionParams):
     """
     Provide code actions for refactoring.
-    Returns both Extract Function and Extract Variable actions.
+    Returns Extract Function, Extract Variable, and Inline Function actions.
     """
     actions = []
     
@@ -449,6 +660,11 @@ def code_actions(ls: RefactorServer, params: CodeActionParams):
         extract_func_action = create_extract_function_action(doc, params)
         if extract_func_action:
             actions.append(extract_func_action)
+        
+        # Try to create Inline Function action
+        inline_func_action = create_inline_function_action(doc, params)
+        if inline_func_action:
+            actions.append(inline_func_action)
         
         return actions if actions else None
     
